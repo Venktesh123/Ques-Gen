@@ -7,18 +7,25 @@ ENV_FILE="$REMOTE_DIR/.env"
 
 echo "Starting deployment to EC2 instance..."
 
+# Add host to known_hosts to prevent verification errors
+echo "Adding host to known_hosts..."
+ssh-keyscan -H $EC2_HOST >> ~/.ssh/known_hosts
+
 # Create deployment package
 echo "Creating deployment package..."
-zip -r deployment.zip app.py requirements.txt README.md .gitignore
+zip -r deployment.zip app.py requirements.txt README.md
+
+# Ensure the directory exists on the remote server
+echo "Ensuring remote directory exists..."
+ssh -o StrictHostKeyChecking=accept-new $EC2_USERNAME@$EC2_HOST "mkdir -p $REMOTE_DIR"
 
 # Copy files to EC2 instance
 echo "Copying files to EC2 instance..."
-ssh $EC2_USERNAME@$EC2_HOST "mkdir -p $REMOTE_DIR"
 scp deployment.zip $EC2_USERNAME@$EC2_HOST:$REMOTE_DIR/
 
 # SSH into EC2 and deploy
 echo "Deploying application on EC2..."
-ssh $EC2_USERNAME@$EC2_HOST << 'EOF'
+ssh $EC2_USERNAME@$EC2_HOST << EOF
   cd $REMOTE_DIR
   unzip -o deployment.zip
   
@@ -34,7 +41,7 @@ ssh $EC2_USERNAME@$EC2_HOST << 'EOF'
   pip install -r requirements.txt
   
   # Create or update .env file with secrets
-  echo "GOOGLE_API_KEY=${GOOGLE_API_KEY}" > .env
+  echo "GOOGLE_API_KEY=$GOOGLE_API_KEY" > .env
   
   # Create or update transcript file with empty content if not exists
   if [ ! -f "cleaned_transcript.txt" ]; then
@@ -45,7 +52,7 @@ ssh $EC2_USERNAME@$EC2_HOST << 'EOF'
   # Create systemd service file for the application if it doesn't exist
   if [ ! -f "/etc/systemd/system/concrete-tech-agent.service" ]; then
     echo "Creating systemd service..."
-    sudo bash -c 'cat > /etc/systemd/system/concrete-tech-agent.service << EOL
+    sudo bash -c "cat > /etc/systemd/system/concrete-tech-agent.service << EOL
 [Unit]
 Description=Concrete Tech Question Agent Service
 After=network.target
@@ -55,12 +62,12 @@ User=$USER
 WorkingDirectory=$REMOTE_DIR
 ExecStart=$REMOTE_DIR/venv/bin/gunicorn --bind 0.0.0.0:8000 app:app
 Restart=always
-Environment="PATH=$REMOTE_DIR/venv/bin"
-Environment="GOOGLE_API_KEY=${GOOGLE_API_KEY}"
+Environment=\"PATH=$REMOTE_DIR/venv/bin\"
+Environment=\"GOOGLE_API_KEY=$GOOGLE_API_KEY\"
 
 [Install]
 WantedBy=multi-user.target
-EOL'
+EOL"
 
     sudo systemctl daemon-reload
     sudo systemctl enable concrete-tech-agent.service
